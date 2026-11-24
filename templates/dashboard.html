@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Secure File Sharing{% endblock %}
+{% block content %}
+<h1>Halo, {{ g.user.username }}</h1>
+<div class="stats">
+  <div class="card stat"><b>{{ sent|length }}</b><span>file terkirim</span></div>
+  <div class="card stat"><b>{{ received|length }}</b><span>file diterima</span></div>
+  <div class="card stat"><b>{{ received|selectattr('status','equalto','sent')|list|length }}</b><span>belum dibuka</span></div>
+  <a class="btn cta" href="{{ url_for('share') }}">Kirim file baru</a>
+</div>
+<div class="two">
+  <section class="card">
+    <h2>Diterima terbaru</h2>
+    {% if received %}
+    <table><tr><th>File</th><th>Dari</th><th>Status</th><th></th></tr>
+      {% for r in received[:5] %}
+      <tr><td>{{ r.original_filename }}</td><td>{{ r.sender_name }}</td>
+          <td><span class="tag {{ r.status }}">{{ 'Sudah diunduh' if r.status == 'downloaded' else 'Belum dibuka' }}</span></td>
+          <td><a href="{{ url_for('decrypt', file_id=r.id) }}">Buka</a></td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">Belum ada file masuk. Minta temanmu mengirim file ke username <b>{{ g.user.username }}</b>.</p>{% endif %}
+  </section>
+  <section class="card">
+    <h2>Terkirim terbaru</h2>
+    {% if sent %}
+    <table><tr><th>File</th><th>Ke</th><th>Waktu</th></tr>
+      {% for r in sent[:5] %}<tr><td>{{ r.original_filename }}</td><td>{{ r.recipient_name }}</td><td>{{ r.created_at }}</td></tr>{% endfor %}
+    </table>
+    {% else %}<p class="muted">Belum ada file terkirim. <a href="{{ url_for('share') }}">Kirim file pertama</a>.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

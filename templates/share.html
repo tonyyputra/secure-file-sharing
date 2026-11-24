@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Share File · Secure File Sharing{% endblock %}
+{% block content %}
+<h1>Kirim file</h1>
+{% if timings %}
+<section class="card ok">
+  <h2>Waktu proses</h2>
+  <p class="muted">Pengukuran untuk file yang baru saja dikirim (milidetik).</p>
+  <table class="compact">
+    <tr><td>Enkripsi AES-256-GCM</td><td>{{ '%.2f'|format(timings.encrypt_aes) }} ms</td></tr>
+    <tr><td>Enkripsi AES key (RSA-OAEP)</td><td>{{ '%.2f'|format(timings.wrap_key) }} ms</td></tr>
+    <tr><td>Tanda tangan manifest (RSA-PSS)</td><td>{{ '%.2f'|format(timings.sign) }} ms</td></tr>
+  </table>
+</section>
+{% endif %}
+<section class="card form-card">
+  {% if not recipients %}
+    <p class="muted">Belum ada pengguna lain yang terdaftar. Daftarkan akun kedua (misalnya di jendela incognito) untuk mencoba.</p>
+  {% else %}
+  <form method="post" enctype="multipart/form-data">
+    {{ csrf_input() }}
+    <label>Penerima
+      <select name="recipient" required>
+        <option value="" disabled {{ 'selected' if not selected }}>Pilih username penerima</option>
+        {% for r in recipients %}<option value="{{ r.username }}" {{ 'selected' if r.username == selected }}>{{ r.username }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>File (maks. 10 MB)<input type="file" name="file" required></label>
+    <label>Signing private key (.pem)
+      <input type="file" name="signing_key" accept=".pem" required>
+      <small>Gunakan file <code>{{ g.user.username }}_signing_private.pem</code>.</small>
+    </label>
+    <label>Passphrase private key<input type="password" name="passphrase" required autocomplete="off"></label>
+    <button class="btn">Enkripsi dan kirim</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

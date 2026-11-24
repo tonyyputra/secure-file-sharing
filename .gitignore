@@ -1,0 +1,6 @@
+venv/
+data/
+__pycache__/
+*.pem
+*.pyc
+benchmark_results.csv

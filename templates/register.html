@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Daftar · Secure File Sharing{% endblock %}
+{% block content %}
+<section class="narrow card">
+  <h1>Buat akun</h1>
+  <p class="muted">Setelah daftar, aplikasi membuat dua pasang kunci RSA untuk Anda: satu untuk enkripsi, satu untuk tanda tangan.</p>
+  <form method="post">
+    {{ csrf_input() }}
+    <label>Username<input name="username" value="{{ username }}" required autocomplete="username"></label>
+    <label>Email<input name="email" type="email" value="{{ email }}" required></label>
+    <label>Password akun<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+    <label>Ulangi password<input name="confirm" type="password" required minlength="8" autocomplete="new-password"></label>
+    <label>Passphrase private key
+      <input name="passphrase" type="password" required minlength="8" autocomplete="new-password">
+      <small>Melindungi file private key (.pem) Anda. Berbeda dari password akun. Jika hilang, file tidak bisa dibuka.</small>
+    </label>
+    <button class="btn">Daftar dan buat kunci</button>
+  </form>
+  <p class="muted">Sudah punya akun? <a href="{{ url_for('login') }}">Masuk</a></p>
+</section>
+{% endblock %}

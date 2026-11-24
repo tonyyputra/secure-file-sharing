@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Keys · Secure File Sharing{% endblock %}
+{% block content %}
+<h1>Kunci Anda</h1>
+{% if pending %}
+<section class="card warn">
+  <h2>Unduh private key sekarang</h2>
+  <p>Private key tidak disimpan permanen di server. Salinan sementara ini hilang dalam 15 menit atau saat server dimatikan. Simpan kedua file bersama passphrase-nya di tempat aman.</p>
+  <p class="row">
+    <a class="btn" href="{{ url_for('key_download', kind='enc') }}">Unduh decryption key</a>
+    <a class="btn" href="{{ url_for('key_download', kind='sig') }}">Unduh signing key</a>
+    <form method="post" action="{{ url_for('key_clear') }}" class="inline">{{ csrf_input() }}<button class="btn ghost">Hapus salinan di server</button></form>
+  </p>
+</section>
+{% endif %}
+<div class="two">
+  <section class="card">
+    <h2>Pasangan kunci enkripsi</h2>
+    <p class="muted">Public key dipakai pengirim untuk mengunci AES key. Private key dipakai Anda untuk membukanya.</p>
+    <p>Sidik jari public key:<br><code>{{ enc_fp }}</code></p>
+  </section>
+  <section class="card">
+    <h2>Pasangan kunci tanda tangan</h2>
+    <p class="muted">Private key dipakai Anda untuk menandatangani paket. Public key dipakai penerima untuk memeriksanya.</p>
+    <p>Sidik jari public key:<br><code>{{ sig_fp }}</code></p>
+  </section>
+</div>
+<section class="card form-card">
+  <h2>Buat ulang pasangan kunci</h2>
+  <p class="muted">Kunci lama tidak berlaku lagi. File yang pernah dikirim kepada Anda tidak bisa dibuka dengan kunci baru, dan tanda tangan file lama Anda tidak bisa diverifikasi penerimanya.</p>
+  <form method="post" action="{{ url_for('key_regenerate') }}">
+    {{ csrf_input() }}
+    <label>Password akun<input type="password" name="password" required></label>
+    <label>Passphrase baru untuk private key<input type="password" name="passphrase" required minlength="8"></label>
+    <button class="btn ghost">Buat kunci baru</button>
+  </form>
+</section>
+{% endblock %}

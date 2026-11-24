@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Received Files · Secure File Sharing{% endblock %}
+{% block content %}
+<h1>File diterima</h1>
+<section class="card">
+{% if rows %}
+<table><tr><th>File</th><th>Pengirim</th><th>Ukuran</th><th>Waktu kirim</th><th>Status</th><th></th></tr>
+{% for r in rows %}<tr><td>{{ r.original_filename }}</td><td>{{ r.sender_name }}</td><td>{{ r.file_size|filesize }}</td><td>{{ r.created_at }}</td>
+<td><span class="tag {{ r.status }}">{{ 'Sudah diunduh' if r.status == 'downloaded' else 'Belum dibuka' }}</span></td>
+<td><a class="btn small" href="{{ url_for('decrypt', file_id=r.id) }}">Verifikasi dan dekripsi</a></td></tr>{% endfor %}
+</table>
+{% else %}<p class="muted">Belum ada file yang dikirim kepada Anda.</p>{% endif %}
+</section>
+{% endblock %}
