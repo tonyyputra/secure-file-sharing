@@ -122,8 +122,21 @@ def close_db(_exc):
         db.close()
 
 
-with sqlite3.connect(DB_PATH) as _c:
-    _c.executescript(SCHEMA)
+def init_db():
+    """Buat tabel yang belum ada. Dipanggil sekali saat modul dimuat.
+
+    Catatan: sqlite3.Connection sebagai context manager hanya mengurus
+    transaksi, tidak menutup koneksi, jadi penutupan dilakukan eksplisit.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            conn.executescript(SCHEMA)
+    finally:
+        conn.close()
+
+
+init_db()
 
 
 def now():
