@@ -216,18 +216,25 @@ def http_error(e):
 
 
 # ------------------------------------------------------------------ kunci
-def issue_keys(user_id, passphrase, replace=False):
-    """Buat 2 pasang RSA. Public key -> SQLite. Private key (PEM ber-passphrase) -> memori sementara."""
+def issue_keys(user_id, passphrase):
+    """Buat 2 pasang RSA. Public key -> SQLite. Private key (PEM ber-passphrase) -> memori sementara.
+
+    Satu pernyataan upsert dipakai untuk pembuatan awal maupun pembuatan ulang.
+    Varian sebelumnya memakai UPDATE terpisah, yang bila baris user_keys belum
+    ada akan sukses tanpa mengubah apa pun sehingga kunci baru hilang diam-diam.
+    """
     enc_key, sig_key = cs.generate_rsa_key(), cs.generate_rsa_key()
     db = get_db()
     enc_pub = cs.export_public_pem(enc_key).decode()
     sig_pub = cs.export_public_pem(sig_key).decode()
-    if replace:
-        db.execute("UPDATE user_keys SET encryption_public_key=?, signing_public_key=?, created_at=? WHERE user_id=?",
-                   (enc_pub, sig_pub, now(), user_id))
-    else:
-        db.execute("INSERT INTO user_keys(user_id, encryption_public_key, signing_public_key, created_at) VALUES(?,?,?,?)",
-                   (user_id, enc_pub, sig_pub, now()))
+    db.execute(
+        """INSERT INTO user_keys(user_id, encryption_public_key, signing_public_key, created_at)
+           VALUES(?,?,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET
+               encryption_public_key = excluded.encryption_public_key,
+               signing_public_key    = excluded.signing_public_key,
+               created_at            = excluded.created_at""",
+        (user_id, enc_pub, sig_pub, now()))
     PENDING_KEYS[user_id] = {
         "enc": cs.export_private_pem(enc_key, passphrase),
         "sig": cs.export_private_pem(sig_key, passphrase),
@@ -467,9 +474,11 @@ def decrypt(file_id):
 @login_required
 def keys():
     k = get_db().execute("SELECT * FROM user_keys WHERE user_id=?", (g.user["id"],)).fetchone()
+    # k bisa None bila baris kunci belum/gagal dibuat. Jangan sampai halaman 500;
+    # tampilkan peringatan dan arahkan pengguna ke form buat ulang kunci.
     return render_template("keys.html", pending=pending_for(g.user["id"]), k=k,
-                           enc_fp=cs.fingerprint(k["encryption_public_key"]),
-                           sig_fp=cs.fingerprint(k["signing_public_key"]))
+                           enc_fp=cs.fingerprint(k["encryption_public_key"]) if k else None,
+                           sig_fp=cs.fingerprint(k["signing_public_key"]) if k else None)
 
 
 @app.route("/keys/download/<kind>")
@@ -500,7 +509,7 @@ def key_regenerate():
     elif len(passphrase) < 8:
         flash("Passphrase minimal 8 karakter.", "error")
     else:
-        issue_keys(g.user["id"], passphrase, replace=True)
+        issue_keys(g.user["id"], passphrase)
         get_db().commit()
         flash("Pasangan kunci baru dibuat. File lama yang ditujukan ke Anda tidak bisa dibuka lagi dengan kunci baru.", "success")
     return redirect(url_for("keys"))
