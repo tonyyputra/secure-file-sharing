@@ -5,6 +5,8 @@ Semua logika kriptografi ada di file ini:
   - RSA-OAEP      : mengamankan AES key dengan public key penerima
   - RSA-PSS       : menandatangani manifest
   - SHA-256       : hash ciphertext
+Manifest juga dipakai sebagai associated data (AAD) AES-GCM, sehingga
+identitas pengirim/penerima terikat ke ciphertext secara kriptografis.
 Paket .sfs = ZIP berisi: manifest.json, ciphertext.bin, signature.bin
 """
 import base64
@@ -23,6 +25,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 MAX_PACKAGE_PART = 12 * 1024 * 1024  # batas ukuran tiap bagian paket (anti ZIP bomb)
 PACKAGE_PARTS = {"manifest.json", "ciphertext.bin", "signature.bin"}
+PACKAGE_VERSION = 2
+
+# Field manifest yang nilainya bergantung pada ciphertext atau AES key, jadi
+# belum diketahui saat enkripsi dimulai dan tidak bisa dipakai sebagai AAD.
+_AAD_EXCLUDED = ("encrypted_aes_key", "ciphertext_sha256")
 
 
 class CryptoError(Exception):
@@ -40,6 +47,21 @@ def _oaep():
 
 def _pss():
     return padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32)
+
+
+def _canon(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _aad(manifest):
+    """Associated data untuk AES-256-GCM: manifest tanpa field turunan ciphertext.
+
+    Mengikat ciphertext ke identitas pengirim/penerima, nama file asli, nonce,
+    dan versi paket secara kriptografis. Tanpa ini, pengikatan tersebut hanya
+    dijamin oleh tanda tangan RSA-PSS; dengan ini, mengubah salah satu field
+    membuat authentication tag GCM langsung gagal walau tanda tangan valid.
+    """
+    return _canon({k: v for k, v in manifest.items() if k not in _AAD_EXCLUDED})
 
 
 def _b64(b):
@@ -106,33 +128,35 @@ def build_package(plaintext, filename, sender, recipient, recipient_enc_public_p
     except ValueError:
         raise CryptoError("Mengambil public key penerima", "Public key penerima tidak valid.")
 
-    # 1) AES-256-GCM: key acak 256 bit + nonce acak 96 bit (baru untuk setiap file)
-    t = time.perf_counter()
-    aes_key = AESGCM.generate_key(bit_length=256)
-    nonce = os.urandom(12)
-    ciphertext = AESGCM(aes_key).encrypt(nonce, plaintext, None)  # tag 16 byte menempel di akhir
-    timings["encrypt_aes"] = (time.perf_counter() - t) * 1000
-
-    # 2) RSA-OAEP: amankan AES key dengan public key penerima
-    t = time.perf_counter()
-    encrypted_key = recipient_pub.encrypt(aes_key, _oaep())
-    timings["wrap_key"] = (time.perf_counter() - t) * 1000
-
-    # 3) Manifest (berisi hash SHA-256 ciphertext)
-    manifest = {
-        "version": 1,
+    # 1) Header manifest disusun lebih dulu supaya bisa dipakai sebagai AAD
+    header = {
+        "version": PACKAGE_VERSION,
         "sender": sender,
         "recipient": recipient,
         "original_filename": filename,
         "sent_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "nonce": _b64(nonce),
-        "encrypted_aes_key": _b64(encrypted_key),
+        "nonce": _b64(os.urandom(12)),
         "algorithms": {"file": "AES-256-GCM", "key": "RSA-2048-OAEP-SHA256", "signature": "RSA-2048-PSS-SHA256"},
-        "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
     }
-    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
-    # 4) RSA-PSS: tanda tangani manifest
+    # 2) AES-256-GCM: key acak 256 bit + nonce acak 96 bit (baru untuk setiap file).
+    #    Header diikutkan sebagai associated data (lihat _aad).
+    t = time.perf_counter()
+    aes_key = AESGCM.generate_key(bit_length=256)
+    ciphertext = AESGCM(aes_key).encrypt(_unb64(header["nonce"]), plaintext, _aad(header))
+    timings["encrypt_aes"] = (time.perf_counter() - t) * 1000  # tag 16 byte menempel di akhir
+
+    # 3) RSA-OAEP: amankan AES key dengan public key penerima
+    t = time.perf_counter()
+    encrypted_key = recipient_pub.encrypt(aes_key, _oaep())
+    timings["wrap_key"] = (time.perf_counter() - t) * 1000
+
+    # 4) Manifest lengkap = header + AES key terenkripsi + hash SHA-256 ciphertext
+    manifest = dict(header, encrypted_aes_key=_b64(encrypted_key),
+                    ciphertext_sha256=hashlib.sha256(ciphertext).hexdigest())
+    manifest_bytes = _canon(manifest)
+
+    # 5) RSA-PSS: tanda tangani manifest
     t = time.perf_counter()
     signature = signing_private_key.sign(manifest_bytes, _pss(), hashes.SHA256())
     timings["sign"] = (time.perf_counter() - t) * 1000
@@ -165,7 +189,8 @@ def open_package(package_bytes, sender_signing_public_pem, recipient_private_key
                  expected_sender, expected_recipient):
     """
     Urutan sesuai laporan 5.2.3:
-      hash ciphertext -> verifikasi RSA-PSS -> pulihkan AES key (RSA-OAEP) -> dekripsi AES-GCM.
+      hash ciphertext -> verifikasi RSA-PSS -> pulihkan AES key (RSA-OAEP)
+      -> dekripsi AES-GCM dengan manifest sebagai associated data.
     Return (plaintext, manifest, dict waktu ms). Raise CryptoError kalau salah satu tahap gagal.
     """
     timings = {}
@@ -173,11 +198,19 @@ def open_package(package_bytes, sender_signing_public_pem, recipient_private_key
 
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest bukan objek JSON")
         expected_hash = manifest["ciphertext_sha256"]
         nonce = _unb64(manifest["nonce"])
         encrypted_key = _unb64(manifest["encrypted_aes_key"])
+        aad = _aad(manifest)
     except (ValueError, KeyError, TypeError):
         raise CryptoError("Membaca manifest", "Manifest rusak atau formatnya tidak valid.")
+
+    if manifest.get("version") != PACKAGE_VERSION:
+        raise CryptoError("Membaca manifest",
+                          "Versi paket %r tidak didukung aplikasi ini (versi yang didukung: %d)."
+                          % (manifest.get("version"), PACKAGE_VERSION))
 
     # 1) Hash ciphertext vs manifest
     t = time.perf_counter()
@@ -213,7 +246,7 @@ def open_package(package_bytes, sender_signing_public_pem, recipient_private_key
     # 5) AES-256-GCM: dekripsi + cek authentication tag
     t = time.perf_counter()
     try:
-        plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext, None)
+        plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext, aad)
     except (InvalidTag, ValueError):
         raise CryptoError("Dekripsi AES-256-GCM", "Authentication tag tidak valid. Data terenkripsi telah berubah.")
     timings["decrypt_aes"] = (time.perf_counter() - t) * 1000
