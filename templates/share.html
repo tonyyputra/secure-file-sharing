@@ -35,4 +35,16 @@
   </form>
   {% endif %}
 </section>
+{% if recipients %}
+<section class="card">
+  <h2>Sidik jari kunci enkripsi penerima</h2>
+  <p class="muted">Aplikasi mengambil public key penerima dari basis datanya sendiri. Kalau basis data itu dimanipulasi,
+  file bisa terkunci ke kunci penyerang tanpa ada tanda apa pun. Cocokkan sidik jari di bawah dengan penerima lewat
+  jalur lain (tatap muka, telepon, pesan terpisah) sebelum mengirim file penting.</p>
+  <table class="compact">
+    <tr><th>Penerima</th><th>Sidik jari kunci enkripsi</th></tr>
+    {% for r in recipients %}<tr><td>{{ r.username }}</td><td><code>{{ r.fingerprint }}</code></td></tr>{% endfor %}
+  </table>
+</section>
+{% endif %}
 {% endblock %}

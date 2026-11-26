@@ -6,6 +6,10 @@
   <section class="card form-card">
     <p><b>{{ row.original_filename }}</b> ({{ row.file_size|filesize }})<br>
     <span class="muted">Dari {{ row.sender_name }} · {{ row.created_at }}</span></p>
+    {% if sender_fp %}
+    <p class="muted">Sidik jari signing key {{ row.sender_name }}:<br><code>{{ sender_fp }}</code><br>
+    Cocokkan dengan pengirim lewat jalur lain untuk memastikan public key di server belum ditukar.</p>
+    {% endif %}
     {% if error %}
     <div class="flash error"><b>Gagal di tahap: {{ step }}</b><br>{{ error }}<br>Proses dihentikan dan file tidak diberikan.</div>
     {% endif %}
@@ -25,6 +29,7 @@
       <li>Hak akses: paket memang ditujukan ke akun Anda</li>
       <li>Hash SHA-256 ciphertext cocok dengan manifest</li>
       <li>Tanda tangan RSA-PSS valid (public key pengirim)</li>
+      <li>Manifest cocok sebagai associated data AES-GCM</li>
       <li>AES key dipulihkan dengan private key Anda (RSA-OAEP)</li>
       <li>Authentication tag AES-256-GCM valid</li>
     </ol>

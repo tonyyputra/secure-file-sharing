@@ -360,7 +360,15 @@ def received_files():
 
 # ------------------------------------------------------------------ share file
 def _recipients():
-    return get_db().execute("SELECT username FROM users WHERE id != ? ORDER BY username", (g.user["id"],)).fetchall()
+    """Pengguna lain yang sudah punya public key, beserta sidik jari kunci
+    enkripsinya. Sidik jari ditampilkan agar pengirim bisa mencocokkannya
+    dengan penerima lewat jalur lain (out-of-band) sebelum mengirim file."""
+    rows = get_db().execute(
+        """SELECT u.username, k.encryption_public_key FROM users u
+           JOIN user_keys k ON k.user_id = u.id
+           WHERE u.id != ? ORDER BY u.username""", (g.user["id"],)).fetchall()
+    return [{"username": r["username"], "fingerprint": cs.fingerprint(r["encryption_public_key"])}
+            for r in rows]
 
 
 @app.route("/share", methods=["GET", "POST"])
@@ -431,11 +439,18 @@ def decrypt(file_id):
         abort(404, "File tidak ditemukan.")
     if row["recipient_id"] != g.user["id"]:
         abort(403, "Anda tidak memiliki hak akses ke file ini.")
+
+    sender_keys = db.execute("SELECT signing_public_key FROM user_keys WHERE user_id=?",
+                             (row["sender_id"],)).fetchone()
+    # Sidik jari signing key pengirim, supaya penerima bisa mencocokkannya
+    # langsung dengan pengirim lewat jalur lain sebelum mempercayai file.
+    sender_fp = cs.fingerprint(sender_keys["signing_public_key"]) if sender_keys else None
+
     if request.method == "GET":
-        return render_template("decrypt.html", row=row, error=None, step=None)
+        return render_template("decrypt.html", row=row, error=None, step=None, sender_fp=sender_fp)
 
     def fail(step, msg):
-        return render_template("decrypt.html", row=row, error=msg, step=step), 422
+        return render_template("decrypt.html", row=row, error=msg, step=step, sender_fp=sender_fp), 422
 
     key_file = request.files.get("decryption_key")
     passphrase = request.form.get("passphrase", "")
@@ -451,7 +466,8 @@ def decrypt(file_id):
     with open(pkg_path, "rb") as f:
         package = f.read()
 
-    sender_keys = db.execute("SELECT signing_public_key FROM user_keys WHERE user_id=?", (row["sender_id"],)).fetchone()
+    if sender_keys is None:
+        return fail("Mengambil public key pengirim", "Pengirim tidak lagi memiliki public key tersimpan.")
     my_keys = db.execute("SELECT encryption_public_key FROM user_keys WHERE user_id=?", (g.user["id"],)).fetchone()
     try:
         enc_priv = cs.load_private_key(key_pem, passphrase, "Membuka decryption private key")
