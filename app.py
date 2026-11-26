@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime
 from functools import wraps
+from urllib.parse import urlparse
 
 from flask import (Flask, Response, abort, flash, g, redirect, render_template,
                    request, send_file, session, url_for)
@@ -32,6 +33,16 @@ ALLOWED_EXT = {"pdf", "txt", "md", "csv", "png", "jpg", "jpeg", "gif", "docx", "
                "pptx", "zip", "json", "py"}
 PENDING_TTL = 15 * 60
 PENDING_KEYS = {}  # user_id -> {"enc": bytes, "sig": bytes, "expires": float}  (hanya di memori)
+
+# Pembatasan percobaan login (anti brute force). Disimpan di memori proses.
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW = 5 * 60       # jendela pengamatan, detik
+LOGIN_LOCKOUT = 5 * 60      # lama penguncian setelah batas terlampaui, detik
+LOGIN_ATTEMPTS = {}         # kunci -> {"count": int, "first": float, "until": float}
+
+# Hash tiruan: dipakai agar username yang tidak ada tetap memakan waktu
+# verifikasi yang sama dengan username yang ada (anti enumerasi lewat timing).
+DUMMY_PASSWORD_HASH = generate_password_hash("sfs-dummy-password-for-constant-time")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -152,10 +163,49 @@ def login_required(view):
     return wrapped
 
 
+def safe_redirect_back(fallback="dashboard"):
+    """Redirect ke halaman sebelumnya, tapi hanya jika Referer menunjuk ke host ini.
+    Tanpa pemeriksaan ini, header Referer (dikendalikan penyerang) bisa dipakai
+    untuk open redirect ke situs luar."""
+    ref = request.referrer
+    if ref:
+        u = urlparse(ref)
+        if not u.netloc or u.netloc == request.host:
+            return redirect(ref)
+    return redirect(url_for(fallback))
+
+
+def login_rate_limit(username):
+    """Return sisa detik penguncian, atau 0 kalau masih boleh mencoba."""
+    key = "%s|%s" % (request.remote_addr or "-", username.lower())
+    rec = LOGIN_ATTEMPTS.get(key)
+    t = time.time()
+    if rec and rec["until"] > t:
+        return int(rec["until"] - t) + 1
+    if rec and t - rec["first"] > LOGIN_WINDOW:
+        rec = None
+    LOGIN_ATTEMPTS[key] = rec or {"count": 0, "first": t, "until": 0.0}
+    return 0
+
+
+def login_record_failure(username):
+    key = "%s|%s" % (request.remote_addr or "-", username.lower())
+    rec = LOGIN_ATTEMPTS.setdefault(key, {"count": 0, "first": time.time(), "until": 0.0})
+    rec["count"] += 1
+    if rec["count"] >= LOGIN_MAX_ATTEMPTS:
+        rec["until"] = time.time() + LOGIN_LOCKOUT
+        rec["count"] = 0
+        rec["first"] = time.time()
+
+
+def login_record_success(username):
+    LOGIN_ATTEMPTS.pop("%s|%s" % (request.remote_addr or "-", username.lower()), None)
+
+
 @app.errorhandler(413)
 def too_large(_e):
     flash("File terlalu besar. Batas maksimal %d MB." % MAX_FILE_MB, "error")
-    return redirect(request.referrer or url_for("dashboard"))
+    return safe_redirect_back("share")
 
 
 @app.errorhandler(403)
@@ -244,11 +294,22 @@ def register():
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        locked = login_rate_limit(username)
+        if locked:
+            flash("Terlalu banyak percobaan login. Coba lagi dalam %d detik." % locked, "error")
+            return render_template("login.html"), 429
         user = get_db().execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        if user and check_password_hash(user["password_hash"], request.form.get("password", "")):
+        # Selalu jalankan verifikasi hash, termasuk saat username tidak ada,
+        # supaya waktu respons tidak membocorkan ada/tidaknya akun.
+        stored_hash = user["password_hash"] if user else DUMMY_PASSWORD_HASH
+        ok = check_password_hash(stored_hash, password)
+        if user and ok:
+            login_record_success(username)
             session.clear()
             session["user_id"] = user["id"]
             return redirect(url_for("dashboard"))
+        login_record_failure(username)
         flash("Username atau password salah.", "error")
     return render_template("login.html")
 
