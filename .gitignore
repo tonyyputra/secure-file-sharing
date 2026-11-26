@@ -1,6 +1,24 @@
+# Virtual environment
 venv/
-data/
+.venv/
+
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+
+# Private key yang diunduh dari aplikasi. JANGAN pernah di-commit.
 *.pem
-*.pyc
+
+# Data runtime: database, paket terenkripsi, dan SECRET_KEY Flask.
+# Jangan pernah di-commit atau diikutkan saat mengumpulkan tugas.
+data/
+
+# Hasil benchmark
 benchmark_results.csv
+benchmark_keygen.csv
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
