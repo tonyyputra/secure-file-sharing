@@ -1,0 +1,46 @@
+# Jalankan:  docker compose up
+# Lalu buka: http://127.0.0.1:5000
+#
+# Hentikan             : docker compose down
+# Hentikan + hapus data: docker compose down -v   (database dan paket hilang)
+# Jalankan tes         : docker compose exec app python test_app.py
+# Jalankan benchmark   : docker compose exec app python benchmark.py
+
+services:
+  app:
+    build: .
+    image: secure-file-sharing:latest
+    container_name: secure-file-sharing
+
+    ports:
+      # Sengaja diikat ke 127.0.0.1, bukan 0.0.0.0. Aplikasi ini menerima
+      # password, passphrase, dan berkas private key lewat HTTP tanpa TLS,
+      # jadi tidak boleh terjangkau dari jaringan tanpa reverse proxy HTTPS
+      # di depannya. Ubah lewat variabel SFS_BIND bila memang diperlukan.
+      - "${SFS_BIND:-127.0.0.1}:${SFS_PORT:-5000}:5000"
+
+    environment:
+      # Kalau tidak diisi, app.py membuat sendiri secret key acak yang kuat
+      # di /app/data/secret_key dan memakainya terus selama volume bertahan.
+      # Isi hanya bila ingin mengelola sendiri, misalnya lewat berkas .env.
+      SECRET_KEY: "${SECRET_KEY:-}"
+      SFS_DATA_DIR: /app/data
+
+    volumes:
+      # Volume bernama, bukan bind mount: database, paket .sfs, dan secret key
+      # tetap ada antar restart tapi tidak pernah bocor ke folder proyek
+      # sehingga tidak mungkin ikut ter-commit.
+      - sfs-data:/app/data
+
+    restart: unless-stopped
+
+    # Aplikasi hanya perlu menulis ke /app/data. Sisa sistem berkas dibuat
+    # hanya-baca supaya kerusakan akibat celah di masa depan terbatas.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  sfs-data:

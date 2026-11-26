@@ -6,17 +6,61 @@ Aplikasi web untuk mengirim file ke pengguna terdaftar secara aman. Dibuat denga
 
 ## 1. Cara menjalankan (dari nol)
 
-### A. Pastikan Python terpasang
+Ada dua cara. **Docker** paling cepat dan tidak perlu memasang Python.
+**Manual** dipakai kalau Docker tidak tersedia.
+
+---
+
+### Cara 1: Docker (disarankan)
+
+```
+docker compose up
+```
+
+Buka **http://127.0.0.1:5000**. Hentikan dengan `Ctrl + C`, atau dari terminal lain:
+
+| Keperluan | Perintah |
+|---|---|
+| Jalankan di belakang (detached) | `docker compose up -d` |
+| Lihat log | `docker compose logs -f` |
+| Hentikan | `docker compose down` |
+| Hentikan **dan hapus semua data** | `docker compose down -v` |
+| Isi akun demo | `docker compose exec app python seed.py` |
+| Jalankan tes | `docker compose exec app python test_app.py` |
+| Jalankan benchmark | `docker compose exec app python benchmark.py` |
+| Bangun ulang setelah ubah kode | `docker compose up -d --build` |
+
+Database, paket `.sfs`, dan secret key disimpan di volume bernama `sfs-data`,
+jadi tetap ada setelah `docker compose down` dan tidak pernah bocor ke folder
+proyek. Yang menghapusnya hanya `down -v`.
+
+Dua catatan tentang konfigurasinya:
+
+- **Port diikat ke `127.0.0.1`, bukan `0.0.0.0`.** Aplikasi menerima password,
+  passphrase, dan berkas private key lewat HTTP tanpa TLS, jadi tidak boleh
+  terjangkau dari jaringan tanpa reverse proxy HTTPS di depannya. Kalau memang
+  perlu dibuka: `SFS_BIND=0.0.0.0 docker compose up` — dan pahami risikonya.
+- **Gunicorn dijalankan dengan satu worker saja**, konkurensi dari thread.
+  Ini bukan kelalaian: `PENDING_KEYS` (salinan private key 15 menit) dan
+  `LOGIN_ATTEMPTS` (pembatas login) adalah dict di memori proses. Dengan lebih
+  dari satu worker, unduhan private key akan 404 secara acak dan pembatas login
+  menjadi N kali lebih lemah. Alasannya ditulis juga di `Dockerfile`.
+
+---
+
+### Cara 2: manual (virtualenv)
+
+#### A. Pastikan Python terpasang
 Buka Terminal (di VS Code: menu **Terminal → New Terminal**), lalu ketik:
 ```
 python --version
 ```
 Harus muncul **Python 3.11 atau lebih baru** (diuji pada 3.11 sampai 3.14). Di Mac/Linux kadang perintahnya `python3`.
 
-### B. Buka folder proyek di VS Code
+#### B. Buka folder proyek di VS Code
 **File → Open Folder…** lalu pilih folder `secure_file_sharing` hasil ekstrak zip.
 
-### C. Buat "virtual environment" (kotak terpisah untuk library proyek)
+#### C. Buat "virtual environment" (kotak terpisah untuk library proyek)
 Windows:
 ```
 python -m venv venv
@@ -31,12 +75,12 @@ Kalau berhasil, di depan baris terminal muncul tulisan `(venv)`.
 
 > Windows PowerShell kadang menolak `activate`. Jalankan sekali: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, lalu ulangi.
 
-### D. Pasang library
+#### D. Pasang library
 ```
 pip install -r requirements.txt
 ```
 
-### E. Jalankan aplikasi
+#### E. Jalankan aplikasi
 ```
 python app.py
 ```
@@ -45,6 +89,42 @@ Buka browser ke **http://127.0.0.1:5000**. Hentikan server dengan `Ctrl + C` di 
 ---
 
 ## 2. Coba alurnya (butuh 2 akun)
+
+### Jalan singkat: pakai akun demo
+
+```
+python seed.py                              # manual
+docker compose exec app python seed.py      # Docker
+```
+
+Tiga akun siap pakai dibuat beserta berkas private key-nya:
+
+| Akun | Email (dummy) | Password akun | Passphrase private key |
+|---|---|---|---|
+| `Tony` | `tony@example.com` | `tony1234` | `ynot1234` |
+| `Eric` | `eric@example.com` | `eric1234` | `cire1234` |
+| `Abi`  | `abi@example.com`  | `abia1234` | `aiba1234` |
+
+Alamat surel memakai domain `example.com`, yang direservasi RFC 2606 untuk
+contoh dan pengujian, jadi dijamin bukan alamat milik orang sungguhan.
+
+**Password** untuk login; **passphrase** untuk membuka berkas `.pem` saat
+mengirim atau mendekripsi. Keduanya sengaja dibedakan.
+
+Berkas private key ditulis ke `data/seed_keys/`. Dari Docker, keluarkan dulu:
+
+```
+docker compose cp app:/app/data/seed_keys ./seed_keys
+```
+
+`seed.py` aman dijalankan berulang: akun yang sudah ada dilewati. Untuk membuat
+ulang dari nol beserta kunci baru, pakai `python seed.py --reset` — ini juga
+menghapus paket, catatan file, dan jejak audit akun tersebut.
+
+> `seed_keys/` dan semua `*.pem` sudah masuk `.gitignore`. Jangan pernah
+> di-commit, walaupun ini akun demo.
+
+### Jalan panjang: daftar sendiri
 
 Pakai **dua jendela browser**: satu biasa, satu **Incognito/Private**, supaya login-nya tidak bertabrakan.
 
@@ -87,6 +167,9 @@ Pola yang muncul dan layak dibahas di laporan: biaya RSA praktis **tetap** di se
 | `templates/` | Halaman HTML: login, register, dashboard, share, sent, received, decrypt, keys |
 | `static/style.css` | Tampilan |
 | `test_app.py`, `benchmark.py` | Pengujian fungsi dan performa |
+| `Dockerfile`, `docker-compose.yml` | Menjalankan via `docker compose up`; multi-stage, non-root, filesystem read-only |
+| `requirements-prod.txt` | Dependensi container: `requirements.txt` + gunicorn |
+| `seed.py` | Membuat akun demo beserta berkas private key-nya |
 | `docs/arsitektur.md` | Diagram arsitektur, sequence enkripsi/dekripsi, ERD, format paket `.sfs` |
 | `docs/pemilihan-algoritma.md` | Justifikasi tiap algoritma beserta alternatifnya, dan model ancaman |
 | `data/` | Dibuat otomatis: `sfs.db` (SQLite), `packages/` (paket `.sfs`), `secret_key` |
@@ -131,3 +214,6 @@ Daftar lengkap beserta alasan teknis dan arah perbaikannya ada di `docs/pemiliha
 | Tombol unduh key 404 | Salinan 15 menit sudah habis. Gunakan Keys → Buat ulang pasangan kunci |
 | "Terlalu banyak percobaan login" | Pembatas 5 percobaan per 5 menit aktif. Tunggu, atau jalankan ulang server saat sedang mengembangkan |
 | "Versi paket tidak didukung" | Paket dibuat versi aplikasi lama (format v1, tanpa AAD). Kirim ulang filenya |
+| Port 5000 dipakai (Docker) | `SFS_PORT=5001 docker compose up` |
+| Ubah kode tapi tidak berubah di Docker | Kode disalin ke dalam image, bukan di-mount. Bangun ulang: `docker compose up -d --build` |
+| Mau mulai dari database bersih | `docker compose down -v && docker compose up -d` |

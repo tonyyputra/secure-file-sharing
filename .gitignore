@@ -22,3 +22,6 @@ benchmark_keygen.csv
 .vscode/
 .idea/
 .DS_Store
+
+# Private key akun demo hasil seed.py
+seed_keys/

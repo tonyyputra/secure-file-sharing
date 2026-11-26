@@ -1,0 +1,7 @@
+# Dependensi untuk menjalankan di container (dipakai oleh Dockerfile).
+# Untuk pengembangan lokal cukup requirements.txt.
+-r requirements.txt
+
+# Server WSGI produksi. Server pengembangan Flask (python app.py) tidak
+# dirancang untuk melayani permintaan nyata.
+gunicorn==27.0.1
