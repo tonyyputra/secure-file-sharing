@@ -7,8 +7,12 @@
 <table><tr><th>File</th><th>Pengirim</th><th>Ukuran</th><th>Waktu kirim</th><th>Status</th><th></th></tr>
 {% for r in rows %}<tr><td>{{ r.original_filename }}</td><td>{{ r.sender_name }}</td><td>{{ r.file_size|filesize }}</td><td>{{ r.created_at }}</td>
 <td><span class="tag {{ r.status }}">{{ 'Sudah diunduh' if r.status == 'downloaded' else 'Belum dibuka' }}</span></td>
-<td><a class="btn small" href="{{ url_for('decrypt', file_id=r.id) }}">Verifikasi dan dekripsi</a></td></tr>{% endfor %}
+<td class="row"><a class="btn small" href="{{ url_for('decrypt', file_id=r.id) }}">Verifikasi dan dekripsi</a>
+<form method="post" action="{{ url_for('delete_file', file_id=r.id) }}" class="inline"
+      onsubmit="return confirm('Hapus paket {{ r.original_filename }} dari server? Tindakan ini tidak bisa dibatalkan.')">
+  {{ csrf_input() }}<button class="btn ghost small">Hapus</button></form></td></tr>{% endfor %}
 </table>
+{% include "_pager.html" %}
 {% else %}<p class="muted">Belum ada file yang dikirim kepada Anda.</p>{% endif %}
 </section>
 {% endblock %}

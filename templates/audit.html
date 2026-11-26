@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Jejak Audit · Secure File Sharing{% endblock %}
+{% block content %}
+<h1>Jejak audit</h1>
+<section class="card">
+  <p class="muted">Catatan aktivitas akun Anda, termasuk percobaan yang gagal. Tanda tangan digital hanya berguna
+  sebagai bukti bila ada catatan siapa melakukan apa dan kapan.</p>
+  {% if rows %}
+  <table>
+    <tr><th>Waktu</th><th>Aktivitas</th><th>File</th><th>Keterangan</th><th>Alamat IP</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.created_at }}</td>
+      <td><span class="tag {{ 'downloaded' if r.action.endswith('_ok') or r.action in ('login_ok','register') }}">{{ r.action }}</span></td>
+      <td>{{ r.file_id if r.file_id else '-' }}</td>
+      <td>{{ r.detail if r.detail else '-' }}</td>
+      <td><code>{{ r.ip if r.ip else '-' }}</code></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% include "_pager.html" %}
+  {% else %}<p class="muted">Belum ada aktivitas tercatat.</p>{% endif %}
+</section>
+{% endblock %}

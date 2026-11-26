@@ -1,0 +1,7 @@
+{% if pages > 1 %}
+<p class="row pager">
+  {% if page > 1 %}<a class="btn ghost small" href="{{ url_for(request.endpoint, page=page-1) }}">&larr; Sebelumnya</a>{% endif %}
+  <span class="muted">Halaman {{ page }} dari {{ pages }} &middot; {{ total }} baris</span>
+  {% if page < pages %}<a class="btn ghost small" href="{{ url_for(request.endpoint, page=page+1) }}">Berikutnya &rarr;</a>{% endif %}
+</p>
+{% endif %}

@@ -27,6 +27,9 @@ STORAGE_DIR = os.path.join(DATA_DIR, "packages")
 DB_PATH = os.path.join(DATA_DIR, "sfs.db")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
+PER_PAGE = 20          # baris per halaman pada daftar file dan audit log
+DASHBOARD_RECENT = 5   # jumlah baris ringkasan di dashboard
+
 MAX_FILE_MB = 10
 MAX_KEY_BYTES = 20 * 1024
 ALLOWED_EXT = {"pdf", "txt", "md", "csv", "png", "jpg", "jpeg", "gif", "docx", "xlsx",
@@ -59,6 +62,17 @@ CREATE TABLE IF NOT EXISTS user_keys (
     signing_public_key TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    user_id INTEGER,
+    username TEXT,
+    action TEXT NOT NULL,
+    file_id INTEGER,
+    detail TEXT,
+    ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, id DESC);
 CREATE TABLE IF NOT EXISTS shared_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sender_id INTEGER NOT NULL REFERENCES users(id),
@@ -116,6 +130,28 @@ def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def audit(action, file_id=None, detail=None, user=None):
+    """Catat satu peristiwa ke audit_log.
+
+    Tanda tangan digital hanya bermakna sebagai bukti (non-repudiation) bila
+    ada catatan siapa melakukan apa dan kapan, termasuk percobaan yang gagal.
+    Pemanggil bertanggung jawab melakukan commit.
+    """
+    u = user if user is not None else getattr(g, "user", None)
+    get_db().execute(
+        "INSERT INTO audit_log(created_at, user_id, username, action, file_id, detail, ip) VALUES(?,?,?,?,?,?,?)",
+        (now(), u["id"] if u else None, u["username"] if u else None,
+         action, file_id, detail, request.remote_addr))
+
+
+def paginate(count_sql, params):
+    """Return (page, pages, total, offset) berdasarkan parameter ?page=."""
+    total = get_db().execute(count_sql, params).fetchone()[0]
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    page = min(max(1, request.args.get("page", 1, type=int) or 1), pages)
+    return page, pages, total, PER_PAGE * (page - 1)
+
+
 # ------------------------------------------------------------------ keamanan dasar
 @app.before_request
 def load_user_and_check_csrf():
@@ -142,7 +178,19 @@ def security_headers(resp):
 
 @app.context_processor
 def inject_helpers():
-    return {"csrf_input": lambda: Markup('<input type="hidden" name="csrf_token" value="%s">' % session.get("csrf", ""))}
+    def inbox_count():
+        """Jumlah file yang dikirim ke pengguna dan belum pernah dibuka, untuk
+        penanda di menu. Tanpa ini penerima tidak punya cara tahu ada file baru."""
+        if getattr(g, "user", None) is None:
+            return 0
+        return get_db().execute(
+            "SELECT COUNT(*) FROM shared_files WHERE recipient_id=? AND status='sent'",
+            (g.user["id"],)).fetchone()[0]
+
+    return {
+        "csrf_input": lambda: Markup('<input type="hidden" name="csrf_token" value="%s">' % session.get("csrf", "")),
+        "inbox_count": inbox_count,
+    }
 
 
 @app.template_filter("filesize")
@@ -289,6 +337,8 @@ def register():
             flash("Username atau email sudah dipakai.", "error")
             return render_template("register.html", username=username, email=email)
         issue_keys(cur.lastrowid, passphrase)
+        audit("register", detail="username=%s" % username,
+              user={"id": cur.lastrowid, "username": username})
         db.commit()
         session.clear()
         session["user_id"] = cur.lastrowid
@@ -313,16 +363,23 @@ def login():
         ok = check_password_hash(stored_hash, password)
         if user and ok:
             login_record_success(username)
+            audit("login_ok", user=user)
+            get_db().commit()
             session.clear()
             session["user_id"] = user["id"]
             return redirect(url_for("dashboard"))
         login_record_failure(username)
+        audit("login_fail", detail="username=%s" % username[:60],
+              user=user if user else None)
+        get_db().commit()
         flash("Username atau password salah.", "error")
     return render_template("login.html")
 
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    audit("logout")
+    get_db().commit()
     session.clear()
     return redirect(url_for("login"))
 
@@ -339,23 +396,73 @@ FROM shared_files s JOIN users su ON su.id = s.sender_id JOIN users ru ON ru.id 
 def dashboard():
     db = get_db()
     uid = g.user["id"]
-    sent = db.execute(FILE_QUERY + " WHERE s.sender_id=? ORDER BY s.id DESC", (uid,)).fetchall()
-    received = db.execute(FILE_QUERY + " WHERE s.recipient_id=? ORDER BY s.id DESC", (uid,)).fetchall()
-    return render_template("dashboard.html", sent=sent, received=received)
+    sent = db.execute(FILE_QUERY + " WHERE s.sender_id=? ORDER BY s.id DESC LIMIT ?",
+                      (uid, DASHBOARD_RECENT)).fetchall()
+    received = db.execute(FILE_QUERY + " WHERE s.recipient_id=? ORDER BY s.id DESC LIMIT ?",
+                          (uid, DASHBOARD_RECENT)).fetchall()
+    # Daftar di atas sengaja dibatasi, jadi jumlah total dihitung terpisah.
+    counts = db.execute(
+        """SELECT
+             (SELECT COUNT(*) FROM shared_files WHERE sender_id=?)                        AS sent,
+             (SELECT COUNT(*) FROM shared_files WHERE recipient_id=?)                     AS received,
+             (SELECT COUNT(*) FROM shared_files WHERE recipient_id=? AND status='sent')   AS unopened""",
+        (uid, uid, uid)).fetchone()
+    return render_template("dashboard.html", sent=sent, received=received, counts=counts)
 
 
 @app.route("/sent")
 @login_required
 def sent_files():
-    rows = get_db().execute(FILE_QUERY + " WHERE s.sender_id=? ORDER BY s.id DESC", (g.user["id"],)).fetchall()
-    return render_template("sent.html", rows=rows)
+    uid = g.user["id"]
+    page, pages, total, off = paginate("SELECT COUNT(*) FROM shared_files WHERE sender_id=?", (uid,))
+    rows = get_db().execute(FILE_QUERY + " WHERE s.sender_id=? ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                            (uid, PER_PAGE, off)).fetchall()
+    return render_template("sent.html", rows=rows, page=page, pages=pages, total=total)
 
 
 @app.route("/received")
 @login_required
 def received_files():
-    rows = get_db().execute(FILE_QUERY + " WHERE s.recipient_id=? ORDER BY s.id DESC", (g.user["id"],)).fetchall()
-    return render_template("received.html", rows=rows)
+    uid = g.user["id"]
+    page, pages, total, off = paginate("SELECT COUNT(*) FROM shared_files WHERE recipient_id=?", (uid,))
+    rows = get_db().execute(FILE_QUERY + " WHERE s.recipient_id=? ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                            (uid, PER_PAGE, off)).fetchall()
+    return render_template("received.html", rows=rows, page=page, pages=pages, total=total)
+
+
+@app.route("/audit")
+@login_required
+def audit_trail():
+    """Jejak audit milik pengguna sendiri."""
+    uid = g.user["id"]
+    page, pages, total, off = paginate("SELECT COUNT(*) FROM audit_log WHERE user_id=?", (uid,))
+    rows = get_db().execute("SELECT * FROM audit_log WHERE user_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                            (uid, PER_PAGE, off)).fetchall()
+    return render_template("audit.html", rows=rows, page=page, pages=pages, total=total)
+
+
+@app.route("/files/<int:file_id>/delete", methods=["POST"])
+@login_required
+def delete_file(file_id):
+    """Hapus paket .sfs beserta catatannya. Pengirim memakainya untuk menarik
+    kembali kiriman, penerima untuk membersihkan file yang sudah diunduh."""
+    db = get_db()
+    row = db.execute("SELECT * FROM shared_files WHERE id=?", (file_id,)).fetchone()
+    if row is None:
+        abort(404, "File tidak ditemukan.")
+    if g.user["id"] not in (row["sender_id"], row["recipient_id"]):
+        abort(403, "Anda tidak memiliki hak akses ke file ini.")
+    try:
+        os.remove(os.path.join(STORAGE_DIR, os.path.basename(row["stored_filename"])))
+    except OSError:
+        pass  # paket sudah tidak ada di disk; catatan tetap dihapus
+    db.execute("DELETE FROM shared_files WHERE id=?", (file_id,))
+    audit("delete", file_id=file_id,
+          detail="peran=%s, file=%s" % ("pengirim" if row["sender_id"] == g.user["id"] else "penerima",
+                                        row["original_filename"]))
+    db.commit()
+    flash("Paket %s dihapus dari server." % row["original_filename"], "success")
+    return safe_redirect_back("dashboard")
 
 
 # ------------------------------------------------------------------ share file
@@ -416,6 +523,8 @@ def share():
         package, timings = cs.build_package(data, filename, g.user["username"], rec["username"],
                                             rec["encryption_public_key"], sig_priv)
     except cs.CryptoError as e:
+        audit("share_fail", detail="tahap=%s, penerima=%s" % (e.step, rec["username"]))
+        db.commit()
         return fail("%s: %s" % (e.step, e.message))
 
     stored = uuid.uuid4().hex + ".sfs"  # nama acak di server
@@ -424,6 +533,8 @@ def share():
     db.execute("""INSERT INTO shared_files(sender_id, recipient_id, original_filename, stored_filename,
                   file_size, package_path, created_at, status) VALUES(?,?,?,?,?,?,?,'sent')""",
                (g.user["id"], rec["id"], filename, stored, len(data), os.path.join("packages", stored), now()))
+    audit("share_ok", file_id=db.execute("SELECT last_insert_rowid()").fetchone()[0],
+          detail="penerima=%s, file=%s, ukuran=%d" % (rec["username"], filename, len(data)))
     db.commit()
     flash("File %s terenkripsi, ditandatangani, dan dikirim ke %s." % (filename, rec["username"]), "success")
     return render_template("share.html", recipients=_recipients(), selected="", timings=timings)
@@ -477,9 +588,12 @@ def decrypt(file_id):
         plaintext, _manifest, _t = cs.open_package(package, sender_keys["signing_public_key"], enc_priv,
                                                    row["sender_name"], row["recipient_name"])
     except cs.CryptoError as e:
+        audit("decrypt_fail", file_id=file_id, detail="tahap=%s" % e.step)
+        db.commit()
         return fail(e.step, e.message)
 
     db.execute("UPDATE shared_files SET status='downloaded' WHERE id=?", (file_id,))
+    audit("decrypt_ok", file_id=file_id, detail="file=%s" % row["original_filename"])
     db.commit()
     return send_file(io.BytesIO(plaintext), as_attachment=True, download_name=row["original_filename"],
                      mimetype="application/octet-stream")
@@ -526,6 +640,7 @@ def key_regenerate():
         flash("Passphrase minimal 8 karakter.", "error")
     else:
         issue_keys(g.user["id"], passphrase)
+        audit("keys_regenerate")
         get_db().commit()
         flash("Pasangan kunci baru dibuat. File lama yang ditujukan ke Anda tidak bisa dibuka lagi dengan kunci baru.", "success")
     return redirect(url_for("keys"))

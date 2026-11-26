@@ -18,8 +18,9 @@
       <a href="{{ url_for('dashboard') }}" class="{{ 'on' if request.endpoint == 'dashboard' }}">Dashboard</a>
       <a href="{{ url_for('share') }}" class="{{ 'on' if request.endpoint == 'share' }}">Share File</a>
       <a href="{{ url_for('sent_files') }}" class="{{ 'on' if request.endpoint == 'sent_files' }}">Sent Files</a>
-      <a href="{{ url_for('received_files') }}" class="{{ 'on' if request.endpoint in ('received_files','decrypt') }}">Received Files</a>
+      <a href="{{ url_for('received_files') }}" class="{{ 'on' if request.endpoint in ('received_files','decrypt') }}">Received Files{% set n = inbox_count() %}{% if n %} <span class="badge">{{ n }}</span>{% endif %}</a>
       <a href="{{ url_for('keys') }}" class="{{ 'on' if request.endpoint == 'keys' }}">Keys</a>
+      <a href="{{ url_for('audit_trail') }}" class="{{ 'on' if request.endpoint == 'audit_trail' }}">Audit</a>
     </nav>
     <form method="post" action="{{ url_for('logout') }}" class="who">
       {{ csrf_input() }}

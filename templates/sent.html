@@ -4,10 +4,14 @@
 <h1>File terkirim</h1>
 <section class="card">
 {% if rows %}
-<table><tr><th>File</th><th>Penerima</th><th>Ukuran</th><th>Waktu kirim</th><th>Status</th></tr>
+<table><tr><th>File</th><th>Penerima</th><th>Ukuran</th><th>Waktu kirim</th><th>Status</th><th></th></tr>
 {% for r in rows %}<tr><td>{{ r.original_filename }}</td><td>{{ r.recipient_name }}</td><td>{{ r.file_size|filesize }}</td><td>{{ r.created_at }}</td>
-<td><span class="tag {{ r.status }}">{{ 'Sudah diunduh penerima' if r.status == 'downloaded' else 'Terkirim' }}</span></td></tr>{% endfor %}
+<td><span class="tag {{ r.status }}">{{ 'Sudah diunduh penerima' if r.status == 'downloaded' else 'Terkirim' }}</span></td>
+<td><form method="post" action="{{ url_for('delete_file', file_id=r.id) }}" class="inline"
+      onsubmit="return confirm('Hapus paket {{ r.original_filename }} dari server? Penerima tidak bisa lagi membukanya.')">
+    {{ csrf_input() }}<button class="btn ghost small">Tarik kembali</button></form></td></tr>{% endfor %}
 </table>
+{% include "_pager.html" %}
 {% else %}<p class="muted">Belum ada file terkirim. <a href="{{ url_for('share') }}">Kirim file</a>.</p>{% endif %}
 </section>
 {% endblock %}
